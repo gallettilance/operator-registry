@@ -94,7 +94,7 @@ var relatedImagesMigration = &Migration{
 		CREATE TABLE IF NOT EXISTS related_image (
 			image TEXT,
      		operatorbundle_name TEXT,
-     		FOREIGN KEY(operatorbundle_name) REFERENCES operatorbundle(name)
+     		FOREIGN KEY(operatorbundle_name) REFERENCES operatorbundle(name) ON DELETE CASCADE
 		);
 		`
 		_, err := tx.ExecContext(ctx, sql)

@@ -222,7 +222,7 @@ func (b *Bundle) cache() error {
 		return nil
 	}
 	for _, o := range b.Objects {
-		if o.GetObjectKind().GroupVersionKind().Kind == "ClusterServiceVersion" {
+		if o.GetKind() == "ClusterServiceVersion" {
 			csv := &ClusterServiceVersion{}
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.UnstructuredContent(), csv); err != nil {
 				return err

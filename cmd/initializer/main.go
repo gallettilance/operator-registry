@@ -37,6 +37,7 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err.Error())
 		panic(err)
 	}
 }

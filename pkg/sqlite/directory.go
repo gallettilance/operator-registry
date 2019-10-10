@@ -20,6 +20,9 @@ const ClusterServiceVersionKind = "ClusterServiceVersion"
 type SQLPopulator interface {
 	Populate() error
 }
+type SQLRemover interface {
+	Remove() error
+}
 
 // DirectoryLoader loads a directory of resources into the database
 type DirectoryLoader struct {
@@ -27,7 +30,58 @@ type DirectoryLoader struct {
 	directory string
 }
 
+// PackageRemover loads a directory of resources into the database
+type PackageRemover struct {
+	store    registry.Load
+	packages string
+}
+
 var _ SQLPopulator = &DirectoryLoader{}
+var _ SQLRemover = &PackageRemover{}
+
+func NewSQLRemoverForPackages(store registry.Load, packages string) *PackageRemover {
+	return &PackageRemover{
+		store:    store,
+		packages: packages,
+	}
+}
+
+func (d *PackageRemover) Remove() error {
+	log := logrus.WithField("pkg", d.packages)
+
+	log.Info("deleting packages")
+
+	var errs []error
+	packages := sanitizePackageList(strings.Split(d.packages, ","))
+	log.Info("input has been sanitized")
+	log.Infof("packages: %s", packages)
+
+	for _, pkg := range packages {
+		if err := d.store.RmPackageName(pkg); err != nil {
+			errs = append(errs, fmt.Errorf("error removing operator package %s: %s", pkg, err))
+		}
+	}
+
+	return utilerrors.NewAggregate(errs)
+}
+
+// sanitizePackageList sanitizes the set of package(s) specified. It removes
+// duplicates and ignores empty string.
+func sanitizePackageList(in []string) []string {
+	out := make([]string, 0)
+
+	inMap := map[string]bool{}
+	for _, item := range in {
+		if _, ok := inMap[item]; ok || item == "" {
+			continue
+		}
+
+		inMap[item] = true
+		out = append(out, item)
+	}
+
+	return out
+}
 
 func NewSQLLoaderForDirectory(store registry.Load, directory string) *DirectoryLoader {
 	return &DirectoryLoader{
@@ -107,7 +161,7 @@ func (d *DirectoryLoader) LoadBundleWalkFunc(path string, f os.FileInfo, err err
 	log.Info("found csv, loading bundle")
 
 	var errs []error
-	bundle, err := d.loadBundle(csv.GetName(), filepath.Dir(path))
+	bundle, err := loadBundle(csv.GetName(), filepath.Dir(path))
 	if err != nil {
 		errs = append(errs, fmt.Errorf("error loading objs in directory: %s", err))
 	}
@@ -128,10 +182,56 @@ func (d *DirectoryLoader) LoadBundleWalkFunc(path string, f os.FileInfo, err err
 	return utilerrors.NewAggregate(errs)
 }
 
-// LoadBundle takes the directory that a CSV is in and assumes the rest of the objects in that directory
+// LoadPackagesWalkFunc attempts to unmarshal the file at the given path into a PackageManifest resource.
+// If unmarshaling is successful, the PackageManifest is added to the loader's store.
+func (d *DirectoryLoader) LoadPackagesWalkFunc(path string, f os.FileInfo, err error) error {
+	if f == nil {
+		return fmt.Errorf("invalid file: %v", f)
+	}
+
+	log := logrus.WithFields(logrus.Fields{"dir": d.directory, "file": f.Name(), "load": "package"})
+	if f.IsDir() {
+		if strings.HasPrefix(f.Name(), ".") {
+			log.Info("skipping hidden directory")
+			return filepath.SkipDir
+		}
+		log.Info("directory")
+		return nil
+	}
+
+	if strings.HasPrefix(f.Name(), ".") {
+		log.Info("skipping hidden file")
+		return nil
+	}
+
+	fileReader, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("unable to load package from file %s: %s", path, err)
+	}
+
+	decoder := yaml.NewYAMLOrJSONDecoder(fileReader, 30)
+	manifest := registry.PackageManifest{}
+	if err = decoder.Decode(&manifest); err != nil {
+		if err != nil {
+			return fmt.Errorf("could not decode contents of file %s into package: %s", path, err)
+		}
+
+	}
+	if manifest.PackageName == "" {
+		return nil
+	}
+
+	if err := d.store.AddPackageChannels(manifest); err != nil {
+		return fmt.Errorf("error loading package into db: %s", err)
+	}
+
+	return nil
+}
+
+// loadBundle takes the directory that a CSV is in and assumes the rest of the objects in that directory
 // are part of the bundle.
-func (d *DirectoryLoader) loadBundle(csvName string, dir string) (*registry.Bundle, error) {
-	log := logrus.WithFields(logrus.Fields{"dir": d.directory, "load": "bundle"})
+func loadBundle(csvName string, dir string) (*registry.Bundle, error) {
+	log := logrus.WithFields(logrus.Fields{"dir": dir, "load": "bundle"})
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -177,47 +277,4 @@ func (d *DirectoryLoader) loadBundle(csvName string, dir string) (*registry.Bund
 	}
 
 	return bundle, utilerrors.NewAggregate(errs)
-}
-
-// LoadPackagesWalkFunc attempts to unmarshal the file at the given path into a PackageManifest resource.
-// If unmarshaling is successful, the PackageManifest is added to the loader's store.
-func (d *DirectoryLoader) LoadPackagesWalkFunc(path string, f os.FileInfo, err error) error {
-	if f == nil {
-		return fmt.Errorf("invalid file: %v", f)
-	}
-
-	log := logrus.WithFields(logrus.Fields{"dir": d.directory, "file": f.Name(), "load": "package"})
-	if f.IsDir() {
-		if strings.HasPrefix(f.Name(), ".") {
-			log.Info("skipping hidden directory")
-			return filepath.SkipDir
-		}
-		log.Info("directory")
-		return nil
-	}
-
-	if strings.HasPrefix(f.Name(), ".") {
-		log.Info("skipping hidden file")
-		return nil
-	}
-
-	fileReader, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("unable to load package from file %s: %s", path, err)
-	}
-
-	decoder := yaml.NewYAMLOrJSONDecoder(fileReader, 30)
-	manifest := registry.PackageManifest{}
-	if err = decoder.Decode(&manifest); err != nil {
-		return fmt.Errorf("could not decode contents of file %s into package: %s", path, err)
-	}
-	if manifest.PackageName == "" {
-		return nil
-	}
-
-	if err := d.store.AddPackageChannels(manifest); err != nil {
-		return fmt.Errorf("error loading package into db: %s", err)
-	}
-
-	return nil
 }

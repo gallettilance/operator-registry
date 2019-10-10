@@ -7,6 +7,7 @@ import (
 type Load interface {
 	AddOperatorBundle(bundle *Bundle) error
 	AddPackageChannels(manifest PackageManifest) error
+	RmPackageName(packageName string) error
 }
 
 type Query interface {

@@ -12,22 +12,22 @@ var initMigration = &Migration{
 	Up: func(ctx context.Context, tx *sql.Tx) error {
 		sql := `
 		CREATE TABLE IF NOT EXISTS operatorbundle (
-			name TEXT PRIMARY KEY,
-			csv TEXT UNIQUE,
+			name TEXT PRIMARY KEY,  
+			csv TEXT UNIQUE, 
 			bundle TEXT
 		);
 		CREATE TABLE IF NOT EXISTS package (
 			name TEXT PRIMARY KEY,
 			default_channel TEXT,
-			FOREIGN KEY(name, default_channel) REFERENCES channel(package_name,name)
+			FOREIGN KEY(name, default_channel) REFERENCES channel(package_name,name) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS channel (
-			name TEXT,
-			package_name TEXT,
+			name TEXT, 
+			package_name TEXT, 
 			head_operatorbundle_name TEXT,
 			PRIMARY KEY(name, package_name),
 			FOREIGN KEY(package_name) REFERENCES package(name),
-			FOREIGN KEY(head_operatorbundle_name) REFERENCES operatorbundle(name)
+			FOREIGN KEY(head_operatorbundle_name) REFERENCES operatorbundle(name) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS channel_entry (
 			entry_id INTEGER PRIMARY KEY,
@@ -36,8 +36,8 @@ var initMigration = &Migration{
 			operatorbundle_name TEXT,
 			replaces INTEGER,
 			depth INTEGER,
-			FOREIGN KEY(replaces) REFERENCES channel_entry(entry_id)  DEFERRABLE INITIALLY DEFERRED,
-			FOREIGN KEY(channel_name, package_name) REFERENCES channel(name, package_name)
+			FOREIGN KEY(replaces) REFERENCES channel_entry(entry_id) DEFERRABLE INITIALLY DEFERRED, 
+			FOREIGN KEY(channel_name, package_name) REFERENCES channel(name, package_name) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS api (
 			group_name TEXT,
@@ -51,8 +51,9 @@ var initMigration = &Migration{
 			version TEXT,
 			kind TEXT,
 			channel_entry_id INTEGER,
+			PRIMARY KEY(group_name, version, kind, channel_entry_id),
 			FOREIGN KEY(channel_entry_id) REFERENCES channel_entry(entry_id),
-			FOREIGN KEY(group_name, version, kind) REFERENCES api(group_name, version, kind)
+			FOREIGN KEY(group_name, version, kind) REFERENCES api(group_name, version, kind) ON DELETE CASCADE
 		);
 		`
 		_, err := tx.ExecContext(ctx, sql)
