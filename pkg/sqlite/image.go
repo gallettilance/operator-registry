@@ -21,37 +21,36 @@ type ImageLoader struct {
 	store     registry.Load
 	image     string
 	directory string
+	reader containertools.BundleReader
+	log *logrus.Entry
 }
 
 func NewSQLLoaderForImage(store registry.Load, image string) *ImageLoader {
+	logger := logrus.WithField("img", image)
 	return &ImageLoader{
 		store:     store,
 		image:     image,
 		directory: "",
+		log: logger,
+		reader: containertools.NewBundleReader(logger),
 	}
 }
 
 func (i *ImageLoader) Populate() error {
-
-	log := logrus.WithField("img", i.image)
-
 	workingDir, err := ioutil.TempDir("./", "bundle_tmp")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(workingDir)
 
-	// Pull the image and get the manifests
-	reader := containertools.NewBundleReader()
-
-	err = reader.GetBundle(i.image, workingDir)
+	err = i.reader.GetBundle(i.image, workingDir)
 	if err != nil {
 		return err
 	}
 
 	i.directory = workingDir
 
-	log.Info("loading Bundle")
+	i.log.Info("loading Bundle")
 	errs := make([]error, 0)
 	if err := i.LoadBundleFunc(workingDir); err != nil {
 		errs = append(errs, err)

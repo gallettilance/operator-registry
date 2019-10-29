@@ -1,8 +1,9 @@
 package containertools
 
 import (
-	"fmt"
 	"os/exec"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -12,16 +13,26 @@ const (
 	Docker = "docker"
 )
 
-// CommandRunner is configured to select a container cli tool and execute commands with that
+// CommandRunner defines methods to shell out to common container tools
+type CommandRunner interface {
+	GetToolName() string
+	Pull(image string) error
+	Save(image, tarFile string) error
+}
+
+// CommandRunnerImpl is configured to select a container cli tool and execute commands with that
 // tooling.
-type CommandRunner struct {
+type CommandRunnerImpl struct{
+	logger *logrus.Entry
 	containerTool string
 }
 
 // NewCommandRunner takes the containerTool as an input string and returns a CommandRunner to
 // run commands with that cli tool
-func NewCommandRunner(containerTool string) *CommandRunner {
-	r := &CommandRunner{}
+func NewCommandRunner(containerTool string, logger *logrus.Entry) CommandRunner {
+	r := CommandRunnerImpl{
+		logger: logger,
+	}
 
 	switch containerTool {
 	case Podman:
@@ -32,15 +43,23 @@ func NewCommandRunner(containerTool string) *CommandRunner {
 		r.containerTool = Podman
 	}
 
-	return r
+	return &r
+}
+
+// GetToolName returns the container tool this command runner is using
+func (r *CommandRunnerImpl) GetToolName() string {
+	return r.containerTool
 }
 
 // Pull takes a container image path hosted on a container registry and runs the pull command to
 // download it onto the local environment
-func (r *CommandRunner) Pull(image string) error {
+func (r *CommandRunnerImpl) Pull(image string) error {
 	args := []string{"pull", image}
 
 	command := exec.Command(r.containerTool, args...)
+
+	r.logger.Infof("running %s pull", r.containerTool)
+	r.logger.Debugf("%s", command.Args)
 
 	err := command.Run()
 	if err != nil {
@@ -52,14 +71,16 @@ func (r *CommandRunner) Pull(image string) error {
 
 // Save takes a local container image and runs the save commmand to convert the image into a specified
 // tarball and push it to the local directory
-func (r *CommandRunner) Save(image, tarFile string) error {
+func (r *CommandRunnerImpl) Save(image, tarFile string) error {
 	args := []string{"save", image, "-o", tarFile}
 
 	command := exec.Command(r.containerTool, args...)
 
-	out, err := command.Output()
+	r.logger.Infof("running %s save", r.containerTool)
+	r.logger.Debugf("%s", command.Args)
+
+	err := command.Run()
 	if err != nil {
-		fmt.Printf("%s", out)
 		return err
 	}
 

@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -21,22 +23,29 @@ type imageManifest struct {
 	Layers []string `json:”Layers”`
 }
 
-type BundleReader struct {
+type BundleReader interface {
+	GetBundle(string, string) error
 }
 
-func NewBundleReader() *BundleReader {
-	return &BundleReader{}
+type BundleReaderImpl struct {
+	logger *logrus.Entry
+	cmd CommandRunner
 }
 
-func (b *BundleReader) GetBundle(image, outputDir string) error {
-	r := NewCommandRunner(Podman)
+func NewBundleReader(logger *logrus.Entry) BundleReader {
+	return BundleReaderImpl{
+		logger:logger,
+		cmd: NewCommandRunner(Podman,logger),
+	}
+}
 
+func (b BundleReaderImpl) GetBundle(image, outputDir string) error {
 	// Create the output directory if it doesn't exist
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 		os.Mkdir(outputDir, 0777)
 	}
 
-	err := r.Pull(image)
+	err := b.cmd.Pull(image)
 	if err != nil {
 		return err
 	}
@@ -50,7 +59,7 @@ func (b *BundleReader) GetBundle(image, outputDir string) error {
 	//TODO: Use filepath package here
 	rootTarfile := filepath.Join(workingDir, "bundle.tar")
 
-	err = r.Save(image, rootTarfile)
+	err = b.cmd.Save(image, rootTarfile)
 	if err != nil {
 		return err
 	}
