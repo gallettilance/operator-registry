@@ -15,6 +15,7 @@ type Load interface {
 	RemoveStrandedBundles() ([]string, error)
 	DeprecateBundle(path string) error
 	ClearNonHeadBundles() error
+	ClearBundle(pkg, csvName string) error
 }
 
 type Query interface {

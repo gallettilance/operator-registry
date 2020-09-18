@@ -27,14 +27,16 @@ type DirectoryPopulator struct {
 	graphLoader GraphLoader
 	querier     Query
 	imageDirMap map[image.Reference]string
+	overwrite   bool
 }
 
-func NewDirectoryPopulator(loader Load, graphLoader GraphLoader, querier Query, imageDirMap map[image.Reference]string) *DirectoryPopulator {
+func NewDirectoryPopulator(loader Load, graphLoader GraphLoader, querier Query, imageDirMap map[image.Reference]string, overwrite bool) *DirectoryPopulator {
 	return &DirectoryPopulator{
 		loader:      loader,
 		graphLoader: graphLoader,
 		querier:     querier,
 		imageDirMap: imageDirMap,
+		overwrite:   overwrite,
 	}
 }
 
@@ -63,19 +65,26 @@ func (i *DirectoryPopulator) Populate(mode Mode) error {
 	return nil
 }
 
-func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput) error {
+func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput, mode Mode) (map[string]*ImageInput, error) {
+
+	if i.overwrite && mode != ReplacesMode {
+		return nil, OverwriteErr{ErrorString: "overwrite-latest flag is only supported in Replaces mode"}
+	}
+
 	var errs []error
 	images := make(map[string]struct{})
 	for _, image := range imagesToAdd {
 		images[image.bundle.BundleImage] = struct{}{}
 	}
 
+	attemptedOverwritesPerPackage := make(map[string]*ImageInput)
 	for _, image := range imagesToAdd {
+		validOverwrite := false
 		bundlePaths, err := i.querier.GetBundlePathsForPackage(context.TODO(), image.bundle.Package)
 		if err != nil {
 			// Assume that this means that the bundle is empty
 			// Or that this is the first time the package is loaded.
-			return nil
+			return nil, nil
 		}
 		for _, bundlePath := range bundlePaths {
 			if _, ok := images[bundlePath]; ok {
@@ -83,26 +92,128 @@ func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput) error 
 				continue
 			}
 		}
-		for _, channel := range image.bundle.Channels {
+
+		channels, err := i.querier.ListChannels(context.TODO(), image.bundle.Package)
+		if err != nil {
+			errs = append(errs, err)
+			return nil, utilerrors.NewAggregate(errs)
+		}
+
+		incomingChannels := make(map[string]struct{})
+		for _, ch := range image.bundle.Channels {
+			incomingChannels[ch] = struct{}{}
+		}
+
+		for _, channel := range channels {
 			bundle, err := i.querier.GetBundle(context.TODO(), image.bundle.Package, channel, image.bundle.csv.GetName())
 			if err != nil {
 				// Assume that if we can not find a bundle for the package, channel and or CSV Name that this is safe to add
 				continue
 			}
 			if bundle != nil {
-				// raise error that this package + channel + csv combo is already in the db
-				errs = append(errs, PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
+				if !i.overwrite {
+					// raise error that this package + channel + csv combo is already in the db
+					errs = append(errs, PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
+					validOverwrite = false
+					break
+				}
+
+				// ensure channels are the same
+				if _, ok := incomingChannels[channel]; !ok {
+					errs = append(errs, OverwriteErr{ErrorString: "channels must match when using --overwrite-latest"})
+					validOverwrite = false
+					break
+				}
+
+				// ensure replaces are the same
+				replaces, err := image.bundle.csv.GetReplaces()
+				if err != nil {
+					errs = append(errs, err)
+					return nil, utilerrors.NewAggregate(errs)
+				}
+				if bundle.GetReplaces() != replaces {
+					errs = append(errs, OverwriteErr{ErrorString: fmt.Sprintf("replaces must match when using --overwrite-latest: got: %s want: %s", replaces, bundle.GetReplaces())})
+					validOverwrite = false
+					break
+				}
+
+				// ensure skips are the same
+				skips, err := image.bundle.csv.GetSkips()
+				if err != nil {
+					errs = append(errs, err)
+					return nil, utilerrors.NewAggregate(errs)
+				}
+				skipMap := make(map[string]struct{})
+				for _, s := range skips {
+					skipMap[s] = struct{}{}
+				}
+				for _, s := range bundle.GetSkips() {
+					if s == "" {
+						continue
+					}
+					if _, ok := skipMap[s]; !ok {
+						errs = append(errs, OverwriteErr{ErrorString: "skips must match when using --overwrite-latest"})
+						validOverwrite = false
+						break
+					}
+				}
+
+				// ensure skiprange is the same
+				if bundle.GetSkipRange() != image.bundle.csv.GetSkipRange() {
+					errs = append(errs, OverwriteErr{ErrorString: "skiprange must match when using --overwrite-latest"})
+					validOverwrite = false
+					break
+				}
+				// ensure default channel is set
+				if image.annotationsFile.GetDefaultChannelName() == "" {
+					errs = append(errs, OverwriteErr{ErrorString: "Must specify default channel when using --overwrite-latest"})
+					continue
+				}
+
+				// ensure default channel is the same
+				defaultChannel, err := i.querier.GetDefaultChannelForPackage(context.TODO(), image.bundle.Package)
+				if err != nil {
+					errs = append(errs, err)
+					break
+				}
+				if defaultChannel != image.annotationsFile.GetDefaultChannelName() {
+					errs = append(errs, OverwriteErr{ErrorString: "default channel must match when using --overwrite-latest"})
+					break
+				}
+				// ensure overwrite is not in the middle of a channel (i.e. nothing replaces it)
+				_, err = i.querier.GetBundleThatReplaces(context.TODO(), image.bundle.csv.GetName(), image.bundle.Package, channel)
+				if err != nil {
+					if err.Error() == fmt.Errorf("no entry found for %s %s", image.bundle.Package, channel).Error() {
+						// overwrite is not replaced by any other bundle
+						validOverwrite = true
+						continue
+					}
+					errs = append(errs, err)
+					break
+				}
+				// This bundle is in this channel but is not the head of this channel
+				errs = append(errs, OverwriteErr{ErrorString: "Cannot overwrite a bundle that is not at the head of a channel using --overwrite-latest"})
+				validOverwrite = false
 				break
+			}
+		}
+		if i.overwrite {
+			if validOverwrite {
+				if _, ok := attemptedOverwritesPerPackage[image.bundle.Package]; ok {
+					errs = append(errs, OverwriteErr{ErrorString: "Cannot overwrite more than one bundle at a time for a given package using --overwrite-latest"})
+					break
+				}
+				attemptedOverwritesPerPackage[image.bundle.Package] = image
 			}
 		}
 	}
 
-	return utilerrors.NewAggregate(errs)
+	return attemptedOverwritesPerPackage, utilerrors.NewAggregate(errs)
 }
 
 func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode) error {
 	// global sanity checks before insertion
-	err := i.globalSanityCheck(imagesToAdd)
+	overwrites, err := i.globalSanityCheck(imagesToAdd, mode)
 	if err != nil {
 		return err
 	}
@@ -118,9 +229,33 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode)
 		// that took the updated graph as a whole as input, rather than inserting bundles of the
 		// same package linearly.
 		var err error
+		var nonOverwriteImagesToAdd []*ImageInput
 		var validImagesToAdd []*ImageInput
-		for len(imagesToAdd) > 0 {
-			validImagesToAdd, imagesToAdd, err = i.getNextReplacesImagesToAdd(imagesToAdd)
+
+		for _, img := range imagesToAdd {
+			if _, ok := overwrites[img.bundle.Package]; ok {
+				if img.bundle.csv.GetName() == overwrites[img.bundle.Package].bundle.csv.GetName() {
+					continue
+				}
+			}
+			nonOverwriteImagesToAdd = append(nonOverwriteImagesToAdd, img)
+		}
+
+		// Add the overwriting bundles first
+		for _, overwriteBundle := range overwrites {
+			// Remove existing csv
+			err = i.loader.ClearBundle(overwriteBundle.bundle.Package, overwriteBundle.bundle.csv.GetName())
+			if err != nil {
+				return err
+			}
+			err = i.loader.AddOperatorBundle(overwriteBundle.bundle)
+			if err != nil {
+				return err
+			}
+		}
+
+		for len(nonOverwriteImagesToAdd) > 0 {
+			validImagesToAdd, nonOverwriteImagesToAdd, err = i.getNextReplacesImagesToAdd(nonOverwriteImagesToAdd)
 			if err != nil {
 				return err
 			}
@@ -159,6 +294,30 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode)
 
 	return nil
 }
+
+// func (i *DirectoryPopulator) overwriteManifests(overwriteBundle *ImageInput) error {
+// 	channels, err := i.querier.ListChannels(context.TODO(), overwriteBundle.annotationsFile.GetName())
+// 	existingPackageChannels := map[string]string{}
+// 	for _, c := range channels {
+// 		current, err := i.querier.GetCurrentCSVNameForChannel(context.TODO(), overwriteBundle.annotationsFile.GetName(), c)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		existingPackageChannels[c] = current
+// 	}
+
+// 	bcsv, err := overwriteBundle.bundle.ClusterServiceVersion()
+// 	if err != nil {
+// 		return fmt.Errorf("error getting csv from bundle %s: %s", overwriteBundle.bundle.Name, err)
+// 	}
+
+// 	packageManifest, err := translateAnnotationsIntoPackage(overwriteBundle.annotationsFile, bcsv, existingPackageChannels)
+// 	if err != nil {
+// 		return fmt.Errorf("Could not translate annotations file into packageManifest %s", err)
+// 	}
+
+// 	return i.loader.UpdateOperatorBundle(packageManifest, overwriteBundle.bundle)
+// }
 
 func (i *DirectoryPopulator) loadManifestsReplaces(bundle *Bundle, annotationsFile *AnnotationsFile) error {
 	channels, err := i.querier.ListChannels(context.TODO(), annotationsFile.GetName())

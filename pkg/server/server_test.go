@@ -199,6 +199,8 @@ func TestGetBundle(t *testing.T) {
 		},
 		Version:   "0.9.2",
 		SkipRange: "< 0.6.0",
+		Replaces:  "etcdoperator.v0.9.0",
+		Skips:     []string{"etcdoperator.v0.9.1"},
 	}
 
 	EqualBundles(t, *expected, *bundle)
@@ -264,6 +266,8 @@ func TestGetBundleForChannel(t *testing.T) {
 		},
 		Version:   "0.9.2",
 		SkipRange: "< 0.6.0",
+		Replaces:  "etcdoperator.v0.9.0",
+		Skips:     []string{"etcdoperator.v0.9.1"},
 	}
 	EqualBundles(t, *expected, *bundle)
 }
@@ -382,6 +386,8 @@ func TestGetBundleThatReplaces(t *testing.T) {
 		},
 		Version:   "0.9.2",
 		SkipRange: "< 0.6.0",
+		Replaces:  "etcdoperator.v0.9.0",
+		Skips:     []string{"etcdoperator.v0.9.1"},
 	}
 	EqualBundles(t, *expected, *bundle)
 }
@@ -447,6 +453,8 @@ func TestGetBundleThatReplacesSynthetic(t *testing.T) {
 		},
 		Version:   "0.9.2",
 		SkipRange: "< 0.6.0",
+		Replaces:  "etcdoperator.v0.9.0",
+		Skips:     []string{"etcdoperator.v0.9.1"},
 	}
 	EqualBundles(t, *expected, *bundle)
 }
@@ -690,6 +698,8 @@ func TestGetDefaultBundleThatProvides(t *testing.T) {
 		},
 		Version:   "0.9.2",
 		SkipRange: "< 0.6.0",
+		Replaces:  "etcdoperator.v0.9.0",
+		Skips:     []string{"etcdoperator.v0.9.1"},
 	}
 	EqualBundles(t, *expected, *bundle)
 }
@@ -842,7 +852,6 @@ func TestListBundles(t *testing.T) {
 		"etcdoperator.v0.9.0",
 	}
 
-
 	var names []string
 	var gotBundles = make([]*api.Bundle, 0)
 
@@ -898,6 +907,7 @@ func EqualBundles(t *testing.T, expected, actual api.Bundle) {
 	require.ElementsMatch(t, expected.Properties, actual.Properties, "properties don't match %#v\n%#v", expected.Properties, actual.Properties)
 	expected.RequiredApis, expected.ProvidedApis, actual.RequiredApis, actual.ProvidedApis = nil, nil, nil, nil
 	expected.Dependencies, expected.Properties, actual.Dependencies, actual.Properties = nil, nil, nil, nil
+	expected.Replaces, expected.Skips, actual.Replaces, actual.Skips = "", []string{}, "", []string{}
 	opts := []cmp.Option{
 		cmpopts.IgnoreUnexported(api.Bundle{}),
 		cmpopts.IgnoreUnexported(api.GroupVersionKind{}),

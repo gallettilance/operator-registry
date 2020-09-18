@@ -30,7 +30,7 @@ func TestRemover(t *testing.T) {
 			query,
 			map[image.Reference]string{
 				image.SimpleReference("quay.io/test/" + name): "../../bundles/" + name,
-			}).Populate(registry.ReplacesMode)
+			}, false).Populate(registry.ReplacesMode)
 	}
 	for _, name := range []string{"etcd.0.9.0", "etcd.0.9.2", "prometheus.0.14.0", "prometheus.0.15.0", "prometheus.0.22.2"} {
 		require.NoError(t, populate(name))

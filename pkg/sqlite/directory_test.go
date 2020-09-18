@@ -175,6 +175,8 @@ func TestQuerierForDirectory(t *testing.T) {
 		RequiredApis: []*api.GroupVersionKind{
 			{Group: "etcd.database.coreos.com", Version: "v1beta2", Kind: "EtcdCluster", Plural: "etcdclusters"},
 		},
+		Replaces: "etcdoperator.v0.9.0",
+		Skips:    []string{"etcdoperator.v0.9.1"},
 	}
 	EqualBundles(t, *expectedBundle, *etcdBundleByChannel)
 
@@ -275,5 +277,6 @@ func EqualBundles(t *testing.T, expected, actual api.Bundle) {
 	require.ElementsMatch(t, expected.Properties, actual.Properties)
 	expected.RequiredApis, expected.ProvidedApis, actual.RequiredApis, actual.ProvidedApis = nil, nil, nil, nil
 	expected.Dependencies, expected.Properties, actual.Dependencies, actual.Properties = nil, nil, nil, nil
+	expected.Replaces, expected.Skips, actual.Replaces, actual.Skips = "", []string{}, "", []string{}
 	require.EqualValues(t, expected, actual)
 }

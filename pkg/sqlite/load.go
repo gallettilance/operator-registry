@@ -43,6 +43,20 @@ func NewSQLLiteLoader(db *sql.DB, opts ...DbOption) (MigratableLoader, error) {
 	return &sqlLoader{db: db, migrator: migrator}, nil
 }
 
+func NewSQLLiteLoaderKeysOff(db *sql.DB, opts ...DbOption) (MigratableLoader, error) {
+	options := defaultDBOptions()
+	for _, o := range opts {
+		o(options)
+	}
+
+	migrator, err := options.MigratorBuilder(db)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sqlLoader{db: db, migrator: migrator}, nil
+}
+
 func (s *sqlLoader) Migrate(ctx context.Context) error {
 	if s.migrator == nil {
 		return fmt.Errorf("no migrator configured")
@@ -131,6 +145,95 @@ func (s *sqlLoader) addOperatorBundle(tx *sql.Tx, bundle *registry.Bundle) error
 	}
 
 	return s.addAPIs(tx, bundle)
+}
+
+func (s *sqlLoader) ClearBundle(pkg, csvName string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+	}()
+
+	delBundle, err := tx.Prepare("delete from operatorbundle where name=?")
+	if err != nil {
+		return err
+	}
+	defer delBundle.Close()
+
+	_, err = delBundle.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	delPkg, err := tx.Prepare("delete from package where name=?")
+	if err != nil {
+		return err
+	}
+	defer delPkg.Close()
+
+	_, err = delPkg.Exec(pkg)
+	if err != nil {
+		return err
+	}
+
+	delImage, err := tx.Prepare("delete from related_image where operatorbundle_name=?")
+	if err != nil {
+		return err
+	}
+	defer delImage.Close()
+
+	_, err = delImage.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	delDep, err := tx.Prepare("delete from dependencies where operatorbundle_name=?")
+	if err != nil {
+		return err
+	}
+	defer delDep.Close()
+
+	_, err = delDep.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	delAPIProvider, err := tx.Prepare("delete from api_provider where operatorbundle_name=?")
+	if err != nil {
+		return err
+	}
+	defer delAPIProvider.Close()
+
+	delAPIRequirer, err := tx.Prepare("delete from api_requirer where operatorbundle_name=?")
+	if err != nil {
+		return err
+	}
+	defer delAPIRequirer.Close()
+
+	_, err = delAPIProvider.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	_, err = delAPIRequirer.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	delProp, err := tx.Prepare("delete from properties where operatorbundle_name=?")
+	if err != nil {
+		return err
+	}
+	defer delProp.Close()
+
+	_, err = delProp.Exec(csvName)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (s *sqlLoader) AddPackageChannelsFromGraph(graph *registry.Package) error {
@@ -677,6 +780,33 @@ func (s *sqlLoader) rmBundle(tx *sql.Tx, csvName string) error {
 	}
 
 	return nil
+}
+
+func (s *sqlLoader) RmCsv(pkg, csvName string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+	}()
+
+	stmt, err := tx.Prepare("DELETE FROM operatorbundle WHERE operatorbundle.name=?")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	if _, err := stmt.Exec(csvName); err != nil {
+		return err
+	}
+
+	err = s.rmChannelEntry(tx, csvName)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (s *sqlLoader) AddBundleSemver(graph *registry.Package, bundle *registry.Bundle) error {

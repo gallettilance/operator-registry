@@ -210,7 +210,7 @@ func (s *SQLQuerier) GetChannelEntriesFromPackage(ctx context.Context, packageNa
 }
 
 func (s *SQLQuerier) GetBundle(ctx context.Context, pkgName, channelName, csvName string) (*api.Bundle, error) {
-	query := `SELECT DISTINCT channel_entry.entry_id, operatorbundle.name, operatorbundle.bundle, operatorbundle.bundlepath, operatorbundle.version, operatorbundle.skiprange
+	query := `SELECT DISTINCT channel_entry.entry_id, operatorbundle.name, operatorbundle.bundle, operatorbundle.bundlepath, operatorbundle.version, operatorbundle.skiprange, operatorbundle.replaces, operatorbundle.skips
 			  FROM operatorbundle INNER JOIN channel_entry ON operatorbundle.name=channel_entry.operatorbundle_name
               WHERE channel_entry.package_name=? AND channel_entry.channel_name=? AND operatorbundle_name=? LIMIT 1`
 	rows, err := s.db.QueryContext(ctx, query, pkgName, channelName, csvName)
@@ -228,7 +228,9 @@ func (s *SQLQuerier) GetBundle(ctx context.Context, pkgName, channelName, csvNam
 	var bundlePath sql.NullString
 	var version sql.NullString
 	var skipRange sql.NullString
-	if err := rows.Scan(&entryId, &name, &bundle, &bundlePath, &version, &skipRange); err != nil {
+	var replaces sql.NullString
+	var skips sql.NullString
+	if err := rows.Scan(&entryId, &name, &bundle, &bundlePath, &version, &skipRange, &replaces, &skips); err != nil {
 		return nil, err
 	}
 
@@ -245,6 +247,8 @@ func (s *SQLQuerier) GetBundle(ctx context.Context, pkgName, channelName, csvNam
 	out.BundlePath = bundlePath.String
 	out.Version = version.String
 	out.SkipRange = skipRange.String
+	out.Replaces = replaces.String
+	out.Skips = strings.Split(skips.String, ",")
 
 	provided, required, err := s.GetApisForEntry(ctx, entryId.Int64)
 	if err != nil {
