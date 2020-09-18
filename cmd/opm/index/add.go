@@ -59,6 +59,10 @@ func addIndexAddCmd(parent *cobra.Command) {
 	indexCmd.Flags().StringP("pull-tool", "p", "", "tool to pull container images. One of: [none, docker, podman]. Defaults to none. Overrides part of container-tool.")
 	indexCmd.Flags().StringP("tag", "t", "", "custom tag for container image being built")
 	indexCmd.Flags().Bool("permissive", false, "allow registry load errors")
+	indexCmd.Flags().Bool("overwrite-latest", false, "force add a single bundle")
+	if err := indexCmd.Flags().MarkHidden("overwrite-latest"); err != nil {
+		logrus.Panic(err.Error())
+	}
 	indexCmd.Flags().StringP("mode", "", "replaces", "graph update mode that defines how channel graphs are updated. One of: [replaces, semver, semver-skippatch]")
 
 	if err := indexCmd.Flags().MarkHidden("debug"); err != nil {
@@ -117,6 +121,11 @@ func runIndexAddCmdFunc(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	overwrite, err := cmd.Flags().GetBool("overwrite-latest")
+	if err != nil {
+		return err
+	}
+
 	modeEnum, err := registry.GetModeFromString(mode)
 	if err != nil {
 		return err
@@ -146,6 +155,7 @@ func runIndexAddCmdFunc(cmd *cobra.Command, args []string) error {
 		Permissive:        permissive,
 		Mode:              modeEnum,
 		SkipTLS:           skipTLS,
+		Overwrite:         overwrite,
 	}
 
 	err = indexAdder.AddToIndex(request)

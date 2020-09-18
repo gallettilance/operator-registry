@@ -679,6 +679,28 @@ func (s *sqlLoader) rmBundle(tx *sql.Tx, csvName string) error {
 	return nil
 }
 
+func (s *sqlLoader) RmCsv(csvName string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.Rollback()
+	}()
+
+	stmt, err := tx.Prepare("DELETE FROM operatorbundle WHERE operatorbundle.name=?")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	if _, err := stmt.Exec(csvName); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *sqlLoader) AddBundleSemver(graph *registry.Package, bundle *registry.Bundle) error {
 	err := s.AddOperatorBundle(bundle)
 	if err != nil {

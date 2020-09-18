@@ -71,7 +71,8 @@ func createAndPopulateDB(db *sql.DB) (*sqlite.SQLQuerier, error) {
 			load,
 			graphLoader,
 			query,
-			refMap).Populate(registry.ReplacesMode)
+			refMap,
+			false).Populate(registry.ReplacesMode)
 	}
 	names := []string{"etcd.0.9.0", "etcd.0.9.2", "prometheus.0.22.2", "prometheus.0.14.0", "prometheus.0.15.0"}
 	if err := populate(names); err != nil {
@@ -486,14 +487,16 @@ func TestImageLoading(t *testing.T) {
 					load,
 					graphLoader,
 					query,
-					map[image.Reference]string{i.ref: i.dir})
+					map[image.Reference]string{i.ref: i.dir},
+					false)
 				require.NoError(t, p.Populate(registry.ReplacesMode))
 			}
 			add := registry.NewDirectoryPopulator(
 				load,
 				graphLoader,
 				query,
-				map[image.Reference]string{tt.addImage.ref: tt.addImage.dir})
+				map[image.Reference]string{tt.addImage.ref: tt.addImage.dir},
+				false)
 			err = add.Populate(registry.ReplacesMode)
 			if tt.wantErr {
 				require.True(t, checkAggErr(err, tt.err))

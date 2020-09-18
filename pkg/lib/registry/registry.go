@@ -31,6 +31,7 @@ type AddToRegistryRequest struct {
 	Bundles       []string
 	Mode          registry.Mode
 	ContainerTool containertools.ContainerTool
+	Overwrite     bool
 }
 
 func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
@@ -84,7 +85,7 @@ func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
 		simpleRefs = append(simpleRefs, image.SimpleReference(ref))
 	}
 
-	if err := populate(context.TODO(), dbLoader, graphLoader, dbQuerier, reg, simpleRefs, request.Mode); err != nil {
+	if err := populate(context.TODO(), dbLoader, graphLoader, dbQuerier, reg, simpleRefs, request.Mode, request.Overwrite); err != nil {
 		r.Logger.Debugf("unable to populate database: %s", err)
 
 		if !request.Permissive {
@@ -98,7 +99,7 @@ func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
 	return nil
 }
 
-func populate(ctx context.Context, loader registry.Load, graphLoader registry.GraphLoader, querier registry.Query, reg image.Registry, refs []image.Reference, mode registry.Mode) error {
+func populate(ctx context.Context, loader registry.Load, graphLoader registry.GraphLoader, querier registry.Query, reg image.Registry, refs []image.Reference, mode registry.Mode, overwrite bool) error {
 	var errs []error
 
 	unpackedImageMap := make(map[image.Reference]string, 0)
@@ -127,7 +128,7 @@ func populate(ctx context.Context, loader registry.Load, graphLoader registry.Gr
 		return utilerrors.NewAggregate(errs)
 	}
 
-	populator := registry.NewDirectoryPopulator(loader, graphLoader, querier, unpackedImageMap)
+	populator := registry.NewDirectoryPopulator(loader, graphLoader, querier, unpackedImageMap, overwrite)
 
 	return populator.Populate(mode)
 }
