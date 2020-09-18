@@ -698,6 +698,11 @@ func (s *sqlLoader) RmCsv(csvName string) error {
 		return err
 	}
 
+	err = s.rmChannelEntry(tx, csvName)
+	if err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 

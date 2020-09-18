@@ -871,3 +871,248 @@ func TestDeprecateBundle(t *testing.T) {
 		})
 	}
 }
+
+func TestOverwrite(t *testing.T) {
+	type args struct {
+		firstAdd  map[image.Reference]string
+		secondAdd map[image.Reference]string
+	}
+	type pkgChannel map[string][]string
+	type expected struct {
+		err                      error
+		remainingBundles         []string
+		remainingPkgChannels     pkgChannel
+		remainingDefaultChannels map[string]string
+	}
+	getBundleRefs := func(names []string) map[image.Reference]string {
+		refs := map[image.Reference]string{}
+		for _, name := range names {
+			refs[image.SimpleReference("quay.io/test/"+name)] = "../../bundles/" + name
+		}
+		return refs
+	}
+
+	tests := []struct {
+		description string
+		args        args
+		expected    expected
+	}{
+		{
+			description: "OverwriteBundle/SimpleCsvChange",
+			args: args{
+				firstAdd: getBundleRefs([]string{"etcd.0.9.0", "prometheus.0.14.0", "prometheus.0.15.0"}),
+				secondAdd: map[image.Reference]string{
+					image.SimpleReference("quay.io/test/new-etcd.0.9.0"):    "testdata/overwrite/etcd.0.9.0",
+					image.SimpleReference("quay.io/test/prometheus.0.22.2"): "../../bundles/prometheus.0.22.2",
+				},
+			},
+			expected: expected{
+				err: nil,
+				remainingBundles: []string{
+					"quay.io/test/new-etcd.0.9.0/alpha",
+					"quay.io/test/new-etcd.0.9.0/beta",
+					"quay.io/test/new-etcd.0.9.0/stable",
+					"quay.io/test/prometheus.0.22.2/preview",
+					"quay.io/test/prometheus.0.15.0/preview",
+					"quay.io/test/prometheus.0.15.0/stable",
+					"quay.io/test/prometheus.0.14.0/preview",
+					"quay.io/test/prometheus.0.14.0/stable",
+				},
+				remainingPkgChannels: pkgChannel{
+					"etcd": []string{
+						"beta",
+						"alpha",
+						"stable",
+					},
+					"prometheus": []string{
+						"preview",
+						"stable",
+					},
+				},
+				remainingDefaultChannels: map[string]string{
+					"etcd":       "stable",
+					"prometheus": "preview",
+				},
+			},
+		},
+		{
+			description: "OverwriteBundle/ChannelRemove",
+			args: args{
+				firstAdd: getBundleRefs([]string{"etcd.0.9.0", "etcd.0.9.2", "prometheus.0.14.0", "prometheus.0.15.0"}),
+				secondAdd: map[image.Reference]string{
+					image.SimpleReference("quay.io/test/new-etcd.0.9.2"):    "testdata/overwrite/etcd.0.9.2",
+					image.SimpleReference("quay.io/test/prometheus.0.22.2"): "../../bundles/prometheus.0.22.2",
+				},
+			},
+			expected: expected{
+				err: nil,
+				remainingBundles: []string{
+					"quay.io/test/etcd.0.9.0/alpha",
+					"quay.io/test/etcd.0.9.0/beta",
+					"quay.io/test/new-etcd.0.9.2/alpha",
+					"quay.io/test/prometheus.0.14.0/preview",
+					"quay.io/test/prometheus.0.14.0/stable",
+					"quay.io/test/prometheus.0.15.0/preview",
+					"quay.io/test/prometheus.0.15.0/stable",
+					"quay.io/test/prometheus.0.22.2/preview",
+				},
+				remainingPkgChannels: pkgChannel{
+					"etcd": []string{
+						"beta",
+						"alpha",
+					},
+					"prometheus": []string{
+						"preview",
+						"stable",
+					},
+				},
+				remainingDefaultChannels: map[string]string{
+					"etcd":       "alpha",
+					"prometheus": "preview",
+				},
+			},
+		},
+		{
+			description: "OverwriteBundle/ChannelSwitch",
+			args: args{
+				firstAdd: getBundleRefs([]string{"etcd.0.9.0", "prometheus.0.14.0", "prometheus.0.15.0", "prometheus.0.22.2"}),
+				secondAdd: map[image.Reference]string{
+					image.SimpleReference("quay.io/test/etcd.0.9.2"):            "../../bundles/etcd.0.9.2",
+					image.SimpleReference("quay.io/test/new-prometheus.0.22.2"): "testdata/overwrite/prometheus.0.22.2",
+				},
+			},
+			expected: expected{
+				err: nil,
+				remainingBundles: []string{
+					"quay.io/test/etcd.0.9.0/alpha",
+					"quay.io/test/etcd.0.9.0/beta",
+					"quay.io/test/etcd.0.9.0/stable",
+					"quay.io/test/etcd.0.9.2/alpha",
+					"quay.io/test/etcd.0.9.2/stable",
+					"quay.io/test/prometheus.0.14.0/preview",
+					"quay.io/test/prometheus.0.14.0/stable",
+					"quay.io/test/prometheus.0.15.0/preview",
+					"quay.io/test/prometheus.0.15.0/stable",
+					"quay.io/test/new-prometheus.0.22.2/alpha",
+					"quay.io/test/prometheus.0.15.0/alpha",
+					"quay.io/test/prometheus.0.14.0/alpha",
+				},
+				remainingPkgChannels: pkgChannel{
+					"etcd": []string{
+						"beta",
+						"alpha",
+						"stable",
+					},
+					"prometheus": []string{
+						"preview",
+						"stable",
+						"alpha",
+					},
+				},
+				remainingDefaultChannels: map[string]string{
+					"etcd":       "alpha",
+					"prometheus": "preview",
+				},
+			},
+		},
+		{
+			description: "OverwriteBundle/DefaultChannelChange",
+			args: args{
+				firstAdd: getBundleRefs([]string{"prometheus.0.14.0", "prometheus.0.15.0"}),
+				secondAdd: map[image.Reference]string{
+					image.SimpleReference("quay.io/test/etcd.0.9.0"):            "../../bundles/etcd.0.9.0",
+					image.SimpleReference("quay.io/test/etcd.0.9.2"):            "../../bundles/etcd.0.9.2",
+					image.SimpleReference("quay.io/test/new-prometheus.0.15.0"): "testdata/overwrite/prometheus.0.15.0",
+				},
+			},
+			expected: expected{
+				err: nil,
+				remainingBundles: []string{
+					"quay.io/test/etcd.0.9.0/alpha",
+					"quay.io/test/etcd.0.9.0/beta",
+					"quay.io/test/etcd.0.9.0/stable",
+					"quay.io/test/etcd.0.9.2/alpha",
+					"quay.io/test/etcd.0.9.2/stable",
+					"quay.io/test/prometheus.0.14.0/preview",
+					"quay.io/test/prometheus.0.14.0/stable",
+					"quay.io/test/new-prometheus.0.15.0/preview",
+					"quay.io/test/new-prometheus.0.15.0/stable",
+				},
+				remainingPkgChannels: pkgChannel{
+					"etcd": []string{
+						"alpha",
+						"beta",
+						"stable",
+					},
+					"prometheus": []string{
+						"preview",
+						"stable",
+					},
+				},
+				remainingDefaultChannels: map[string]string{
+					"etcd":       "alpha",
+					"prometheus": "stable",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			logrus.SetLevel(logrus.DebugLevel)
+			db, cleanup := CreateTestDb(t)
+			defer cleanup()
+			store, err := sqlite.NewSQLLiteLoader(db)
+			require.NoError(t, err)
+			require.NoError(t, store.Migrate(context.TODO()))
+
+			query := sqlite.NewSQLLiteQuerierFromDb(db)
+
+			graphLoader, err := sqlite.NewSQLGraphLoaderFromDB(db)
+			require.NoError(t, err)
+
+			populate := func(bundles map[image.Reference]string) error {
+				return registry.NewDirectoryPopulator(
+					store,
+					graphLoader,
+					query,
+					bundles,
+					true).Populate(registry.ReplacesMode)
+			}
+			require.NoError(t, populate(tt.args.firstAdd))
+			require.NoError(t, populate(tt.args.secondAdd))
+
+			// Ensure remaining bundlePaths in db match
+			bundles, err := query.ListBundles(context.Background())
+			require.NoError(t, err)
+			var bundlePaths []string
+			for _, bundle := range bundles {
+				bundlePaths = append(bundlePaths, strings.Join([]string{bundle.BundlePath, bundle.ChannelName}, "/"))
+			}
+			fmt.Println("remaining", bundlePaths)
+			require.ElementsMatch(t, tt.expected.remainingBundles, bundlePaths)
+
+			// Ensure remaining channels and default channel match
+			packages, err := query.ListPackages(context.Background())
+			require.NoError(t, err)
+
+			for _, pkg := range packages {
+				channelEntries, err := query.GetChannelEntriesFromPackage(context.Background(), pkg)
+				require.NoError(t, err)
+
+				uniqueChannels := make(map[string]struct{})
+				var channels []string
+				for _, ch := range channelEntries {
+					uniqueChannels[ch.ChannelName] = struct{}{}
+				}
+				for k := range uniqueChannels {
+					channels = append(channels, k)
+				}
+				defaultChannel, err := query.GetDefaultChannelForPackage(context.Background(), pkg)
+				require.NoError(t, err)
+				require.ElementsMatch(t, tt.expected.remainingPkgChannels[pkg], channels)
+				require.Equal(t, tt.expected.remainingDefaultChannels[pkg], defaultChannel)
+			}
+		})
+	}
+}
