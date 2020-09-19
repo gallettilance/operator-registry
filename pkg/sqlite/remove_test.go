@@ -24,7 +24,8 @@ func TestRemover(t *testing.T) {
 			dbName,
 			map[image.Reference]string{
 				image.SimpleReference("quay.io/test/" + name): "../../bundles/" + name,
-			})
+			},
+			make(map[string]map[image.Reference]string, 0), false)
 		require.NoError(t, err)
 		return p.Populate(registry.ReplacesMode)
 	}

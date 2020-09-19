@@ -651,6 +651,10 @@ func (s *sqlLoader) RemovePackage(packageName string) error {
 		tx.Rollback()
 	}()
 
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON", nil); err != nil {
+		return err
+	}
+
 	csvNames, err := s.getCSVNames(tx, packageName)
 	if err != nil {
 		return err
@@ -703,6 +707,11 @@ func (s *sqlLoader) AddBundlePackageChannels(manifest registry.PackageManifest, 
 	}()
 
 	if err := s.addOperatorBundle(tx, bundle); err != nil {
+		return err
+	}
+
+	// ensure delete cascades
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON", nil); err != nil {
 		return err
 	}
 

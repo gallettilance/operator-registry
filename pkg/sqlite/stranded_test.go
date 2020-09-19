@@ -22,7 +22,8 @@ func TestStrandedBundleRemover(t *testing.T) {
 			dbName,
 			map[image.Reference]string{
 				image.SimpleReference("quay.io/test/" + name): "./testdata/strandedbundles/" + name,
-			})
+			},
+			make(map[string]map[image.Reference]string, 0), false)
 		require.NoError(t, err)
 		return p.Populate(registry.ReplacesMode)
 	}

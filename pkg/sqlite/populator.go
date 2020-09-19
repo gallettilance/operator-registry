@@ -18,17 +18,21 @@ type Dependencies struct {
 
 // DirectoryPopulator loads an unpacked operator bundle from a directory into the database.
 type DirectoryPopulator struct {
-	inputDatabase string
-	loader        registry.Load
-	graphLoader   registry.GraphLoader
-	querier       registry.Query
-	imageDirMap   map[image.Reference]string
+	inputDatabase   string
+	loader          registry.Load
+	graphLoader     registry.GraphLoader
+	querier         registry.Query
+	imageDirMap     map[image.Reference]string
+	overwriteDirMap map[string]map[image.Reference]string
+	overwrite       bool
 }
 
-func NewDirectoryPopulator(inputDatabase string, imageDirMap map[image.Reference]string) (*DirectoryPopulator, error) {
+func NewDirectoryPopulator(inputDatabase string, imageDirMap map[image.Reference]string, overwriteDirMap map[string]map[image.Reference]string, overwrite bool) (*DirectoryPopulator, error) {
 	return &DirectoryPopulator{
-		inputDatabase: inputDatabase,
-		imageDirMap:   imageDirMap,
+		inputDatabase:   inputDatabase,
+		imageDirMap:     imageDirMap,
+		overwriteDirMap: overwriteDirMap,
+		overwrite:       overwrite,
 	}, nil
 }
 
@@ -68,11 +72,24 @@ func (i *DirectoryPopulator) Populate(mode registry.Mode) error {
 		imagesToAdd = append(imagesToAdd, imageInput)
 	}
 
+	imagesToReAdd := make([]*registry.ImageInput, 0)
+	for pkg := range i.overwriteDirMap {
+		for to, from := range i.overwriteDirMap[pkg] {
+			imageInput, err := registry.NewImageInput(to, from)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+
+			imagesToReAdd = append(imagesToReAdd, imageInput)
+		}
+	}
+
 	if len(errs) > 0 {
 		return utilerrors.NewAggregate(errs)
 	}
 
-	err = i.loadManifests(imagesToAdd, mode)
+	err = i.loadManifests(imagesToAdd, imagesToReAdd, mode)
 	if err != nil {
 		return err
 	}
@@ -87,7 +104,9 @@ func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*registry.ImageInpu
 		images[image.Bundle.BundleImage] = struct{}{}
 	}
 
+	attemptedOverwritesPerPackage := map[string]struct{}{}
 	for _, image := range imagesToAdd {
+		validOverwrite := false
 		bundlePaths, err := i.querier.GetBundlePathsForPackage(context.TODO(), image.Bundle.Package)
 		if err != nil {
 			// Assume that this means that the bundle is empty
@@ -112,17 +131,41 @@ func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*registry.ImageInpu
 				continue
 			}
 			if bundle != nil {
-				// raise error that this package + channel + csv combo is already in the db
-				errs = append(errs, registry.PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
+				if !i.overwrite {
+					// raise error that this package + channel + csv combo is already in the db
+					errs = append(errs, registry.PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
+					break
+				}
+				// ensure overwrite is not in the middle of a channel (i.e. nothing replaces it)
+				_, err = i.querier.GetBundleThatReplaces(context.TODO(), image.Bundle.Csv.GetName(), image.Bundle.Package, channel)
+				if err != nil {
+					if err.Error() == fmt.Errorf("no entry found for %s %s", image.Bundle.Package, channel).Error() {
+						// overwrite is not replaced by any other bundle
+						validOverwrite = true
+						continue
+					}
+					errs = append(errs, err)
+					break
+				}
+				// This bundle is in this channel but is not the head of this channel
+				errs = append(errs, registry.OverwriteErr{ErrorString: "Cannot overwrite a bundle that is not at the head of a channel using --overwrite-latest"})
+				validOverwrite = false
 				break
 			}
+		}
+		if validOverwrite {
+			if _, ok := attemptedOverwritesPerPackage[image.Bundle.Package]; ok {
+				errs = append(errs, registry.OverwriteErr{ErrorString: "Cannot overwrite more than one bundle at a time for a given package using --overwrite-latest"})
+				break
+			}
+			attemptedOverwritesPerPackage[image.Bundle.Package] = struct{}{}
 		}
 	}
 
 	return utilerrors.NewAggregate(errs)
 }
 
-func (i *DirectoryPopulator) loadManifests(imagesToAdd []*registry.ImageInput, mode registry.Mode) error {
+func (i *DirectoryPopulator) loadManifests(imagesToAdd []*registry.ImageInput, imagesToReAdd []*registry.ImageInput, mode registry.Mode) error {
 	// global sanity checks before insertion
 	err := i.globalSanityCheck(imagesToAdd)
 	if err != nil {
@@ -141,6 +184,15 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*registry.ImageInput, m
 		// same package linearly.
 		var err error
 		var validImagesToAdd []*registry.ImageInput
+
+		for pkg := range i.overwriteDirMap {
+			err := i.loader.RemovePackage(pkg)
+			if err != nil {
+				return err
+			}
+		}
+
+		imagesToAdd = append(imagesToAdd, imagesToReAdd...)
 
 		for len(imagesToAdd) > 0 {
 			validImagesToAdd, imagesToAdd, err = i.getNextReplacesImagesToAdd(imagesToAdd)
