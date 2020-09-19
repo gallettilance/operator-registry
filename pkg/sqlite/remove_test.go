@@ -2,9 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"testing"
+
 	"github.com/operator-framework/operator-registry/pkg/image"
 	"github.com/operator-framework/operator-registry/pkg/registry"
-	"testing"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
@@ -12,25 +13,21 @@ import (
 
 func TestRemover(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	db, dbName, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
 	require.NoError(t, store.Migrate(context.TODO()))
 
-	query := NewSQLLiteQuerierFromDb(db)
-
-	graphLoader, err := NewSQLGraphLoaderFromDB(db)
-	require.NoError(t, err)
-
 	populate := func(name string) error {
-		return registry.NewDirectoryPopulator(
-			store,
-			graphLoader,
-			query,
+		p, err := NewDirectoryPopulator(
+			dbName,
 			map[image.Reference]string{
 				image.SimpleReference("quay.io/test/" + name): "../../bundles/" + name,
-			}).Populate(registry.ReplacesMode)
+			},
+			make(map[string]map[image.Reference]string, 0), false)
+		require.NoError(t, err)
+		return p.Populate(registry.ReplacesMode)
 	}
 	for _, name := range []string{"etcd.0.9.0", "etcd.0.9.2", "prometheus.0.14.0", "prometheus.0.15.0", "prometheus.0.22.2"} {
 		require.NoError(t, populate(name))

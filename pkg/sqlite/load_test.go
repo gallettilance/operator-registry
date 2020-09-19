@@ -126,7 +126,7 @@ func TestAddPackageChannels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			db, cleanup := CreateTestDb(t)
+			db, _, cleanup := CreateTestDb(t)
 			defer cleanup()
 			store, err := NewSQLLiteLoader(db)
 			require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestAddPackageChannels(t *testing.T) {
 }
 
 func TestClearNonHeadBundles(t *testing.T) {
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestGetTailFromBundle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			db, cleanup := CreateTestDb(t)
+			db, _, cleanup := CreateTestDb(t)
 			defer cleanup()
 			store, err := NewSQLLiteLoader(db)
 			require.NoError(t, err)

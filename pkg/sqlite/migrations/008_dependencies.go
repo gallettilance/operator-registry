@@ -25,7 +25,7 @@ var dependenciesMigration = &Migration{
 			operatorbundle_name TEXT,
 			operatorbundle_version TEXT,
 			operatorbundle_path TEXT,
-			FOREIGN KEY(operatorbundle_name, operatorbundle_version, operatorbundle_path) REFERENCES operatorbundle(name, version, bundlepath) ON DELETE CASCADE
+			FOREIGN KEY(operatorbundle_name, operatorbundle_version, operatorbundle_path) REFERENCES operatorbundle(name, version, bundlepath) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
 		);
 		`
 		_, err := tx.ExecContext(ctx, sql)

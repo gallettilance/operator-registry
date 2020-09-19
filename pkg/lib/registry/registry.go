@@ -31,29 +31,10 @@ type AddToRegistryRequest struct {
 	Bundles       []string
 	Mode          registry.Mode
 	ContainerTool containertools.ContainerTool
+	Overwrite     bool
 }
 
 func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
-	db, err := sql.Open("sqlite3", request.InputDatabase)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	dbLoader, err := sqlite.NewSQLLiteLoader(db)
-	if err != nil {
-		return err
-	}
-	if err := dbLoader.Migrate(context.TODO()); err != nil {
-		return err
-	}
-
-	graphLoader, err := sqlite.NewSQLGraphLoaderFromDB(db)
-	if err != nil {
-		return err
-	}
-	dbQuerier := sqlite.NewSQLLiteQuerierFromDb(db)
-
 	// add custom ca certs to resolver
 
 	var reg image.Registry
@@ -84,7 +65,7 @@ func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
 		simpleRefs = append(simpleRefs, image.SimpleReference(ref))
 	}
 
-	if err := populate(context.TODO(), dbLoader, graphLoader, dbQuerier, reg, simpleRefs, request.Mode); err != nil {
+	if err := populate(context.TODO(), request.InputDatabase, reg, simpleRefs, request.Mode, request.Overwrite); err != nil {
 		r.Logger.Debugf("unable to populate database: %s", err)
 
 		if !request.Permissive {
@@ -98,36 +79,94 @@ func (r RegistryUpdater) AddToRegistry(request AddToRegistryRequest) error {
 	return nil
 }
 
-func populate(ctx context.Context, loader registry.Load, graphLoader registry.GraphLoader, querier registry.Query, reg image.Registry, refs []image.Reference, mode registry.Mode) error {
+func unpackImage(ctx context.Context, reg image.Registry, ref image.Reference) (image.Reference, string, func() error, error) {
 	var errs []error
-
-	unpackedImageMap := make(map[image.Reference]string, 0)
-	for _, ref := range refs {
-		workingDir, err := ioutil.TempDir("./", "bundle_tmp")
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		defer os.RemoveAll(workingDir)
-
-		if err = reg.Pull(ctx, ref); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		if err = reg.Unpack(ctx, ref, workingDir); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		unpackedImageMap[ref] = workingDir
+	workingDir, err := ioutil.TempDir("./", "bundle_tmp")
+	if err != nil {
+		errs = append(errs, err)
 	}
+
+	if err = reg.Pull(ctx, ref); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err = reg.Unpack(ctx, ref, workingDir); err != nil {
+		errs = append(errs, err)
+	}
+
+	cleanup := func() error { return os.RemoveAll(workingDir) }
 
 	if len(errs) > 0 {
-		return utilerrors.NewAggregate(errs)
+		return nil, "", cleanup, utilerrors.NewAggregate(errs)
+	}
+	return ref, workingDir, cleanup, nil
+}
+
+func populate(ctx context.Context, inputDatabase string, reg image.Registry, refs []image.Reference, mode registry.Mode, overwrite bool) error {
+	unpackedImageMap := make(map[image.Reference]string, 0)
+	for _, ref := range refs {
+		to, from, cleanup, err := unpackImage(ctx, reg, ref)
+		if err != nil {
+			return err
+		}
+		unpackedImageMap[to] = from
+		defer cleanup()
 	}
 
-	populator := registry.NewDirectoryPopulator(loader, graphLoader, querier, unpackedImageMap)
+	overwriteImageMap := make(map[string]map[image.Reference]string, 0)
+	if overwrite {
+		db, err := sql.Open("sqlite3", inputDatabase)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+
+		dbLoader, err := sqlite.NewSQLLiteLoader(db)
+		if err != nil {
+			return err
+		}
+		if err := dbLoader.Migrate(context.TODO()); err != nil {
+			return err
+		}
+
+		querier := sqlite.NewSQLLiteQuerierFromDb(db)
+		// find all bundles that are attempting to overwrite
+		for to, from := range unpackedImageMap {
+			img, err := registry.NewImageInput(to, from)
+			if err != nil {
+				return err
+			}
+			overwritten, err := querier.GetBundlePathIfExists(context.TODO(), img.Bundle.Csv.GetName())
+			if err != nil {
+				return err
+			}
+			if overwritten != "" {
+				// get all bundle paths for that package - we will re-add these to regenerate the graph
+				bundles, err := querier.GetBundlesForPackage(context.TODO(), img.Bundle.Package)
+				if err != nil {
+					return err
+				}
+				for bundle := range bundles {
+					if _, ok := overwriteImageMap[img.Bundle.Package]; !ok {
+						overwriteImageMap[img.Bundle.Package] = make(map[image.Reference]string, 0)
+					}
+					if bundle.CsvName != img.Bundle.Csv.GetName() {
+						to, from, cleanup, err := unpackImage(context.TODO(), reg, image.SimpleReference(bundle.BundlePath))
+						if err != nil {
+							return err
+						}
+						defer cleanup()
+						overwriteImageMap[img.Bundle.Package][to] = from
+					}
+				}
+			}
+		}
+	}
+
+	populator, err := sqlite.NewDirectoryPopulator(inputDatabase, unpackedImageMap, overwriteImageMap, overwrite)
+	if err != nil {
+		return err
+	}
 
 	return populator.Populate(mode)
 }

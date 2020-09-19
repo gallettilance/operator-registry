@@ -41,7 +41,7 @@ type Bundle struct {
 	Package      string
 	Channels     []string
 	BundleImage  string
-	csv          *ClusterServiceVersion
+	Csv          *ClusterServiceVersion
 	v1beta1crds  []*apiextensionsv1beta1.CustomResourceDefinition
 	v1crds       []*apiextensionsv1.CustomResourceDefinition
 	Dependencies []*Dependency
@@ -83,35 +83,35 @@ func (b *Bundle) ClusterServiceVersion() (*ClusterServiceVersion, error) {
 	if err := b.cache(); err != nil {
 		return nil, err
 	}
-	return b.csv, nil
+	return b.Csv, nil
 }
 
 func (b *Bundle) Version() (string, error) {
 	if err := b.cache(); err != nil {
 		return "", err
 	}
-	return b.csv.GetVersion()
+	return b.Csv.GetVersion()
 }
 
 func (b *Bundle) SkipRange() (string, error) {
 	if err := b.cache(); err != nil {
 		return "", err
 	}
-	return b.csv.GetSkipRange(), nil
+	return b.Csv.GetSkipRange(), nil
 }
 
 func (b *Bundle) Replaces() (string, error) {
 	if err := b.cache(); err != nil {
 		return "", err
 	}
-	return b.csv.GetReplaces()
+	return b.Csv.GetReplaces()
 }
 
 func (b *Bundle) Skips() ([]string, error) {
 	if err := b.cache(); err != nil {
 		return nil, err
 	}
-	return b.csv.GetSkips()
+	return b.Csv.GetSkips()
 }
 
 func (b *Bundle) CustomResourceDefinitions() ([]runtime.Object, error) {
@@ -284,7 +284,7 @@ func (b *Bundle) cache() error {
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.UnstructuredContent(), csv); err != nil {
 				return err
 			}
-			b.csv = csv
+			b.Csv = csv
 			break
 		}
 	}

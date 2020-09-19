@@ -18,7 +18,7 @@ import (
 
 func TestDirectoryLoader(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -31,7 +31,7 @@ func TestDirectoryLoader(t *testing.T) {
 func TestDirectoryLoaderWithBadPackageData(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestDirectoryLoaderWithBadPackageData(t *testing.T) {
 func TestDirectoryLoaderWithBadBundleData(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestDirectoryLoaderWithBadBundleData(t *testing.T) {
 }
 
 func TestQuerierForDirectory(t *testing.T) {
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	load, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -266,14 +266,4 @@ func TestQuerierForDirectory(t *testing.T) {
 	dbImages, err := store.ListImages(context.TODO())
 	require.NoError(t, err)
 	require.ElementsMatch(t, expectedDatabaseImages, dbImages)
-}
-
-func EqualBundles(t *testing.T, expected, actual api.Bundle) {
-	require.ElementsMatch(t, expected.ProvidedApis, actual.ProvidedApis)
-	require.ElementsMatch(t, expected.RequiredApis, actual.RequiredApis)
-	require.ElementsMatch(t, expected.Dependencies, actual.Dependencies)
-	require.ElementsMatch(t, expected.Properties, actual.Properties)
-	expected.RequiredApis, expected.ProvidedApis, actual.RequiredApis, actual.ProvidedApis = nil, nil, nil, nil
-	expected.Dependencies, expected.Properties, actual.Dependencies, actual.Properties = nil, nil, nil, nil
-	require.EqualValues(t, expected, actual)
 }

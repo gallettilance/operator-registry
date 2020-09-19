@@ -706,6 +706,11 @@ func (s *sqlLoader) AddBundlePackageChannels(manifest registry.PackageManifest, 
 		return err
 	}
 
+	// ensure delete cascades
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON", nil); err != nil {
+		return err
+	}
+
 	// Delete package and channels (entries will cascade) - they will be recalculated
 	deletePkg, err := tx.Prepare("delete from package where name = ?")
 	if err != nil {
