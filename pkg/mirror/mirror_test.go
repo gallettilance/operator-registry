@@ -16,7 +16,7 @@ import (
 func CreateTestDb(t *testing.T) (*sql.DB, string, func()) {
 	dbName := fmt.Sprintf("test-%d.db", rand.Int())
 
-	db, err := sql.Open("sqlite3", dbName)
+	db, err := sql.Open("sqlite3", "file:"+dbName+"?_foreign_keys=on")
 	require.NoError(t, err)
 
 	load, err := sqlite.NewSQLLiteLoader(db)

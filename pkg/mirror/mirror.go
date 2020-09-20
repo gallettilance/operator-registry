@@ -71,7 +71,7 @@ func (b *IndexImageMirrorer) Mirror() (map[string]string, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_foreign_keys=on")
 	if err != nil {
 		return nil, err
 	}

@@ -51,7 +51,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.9.3",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 							{
 							"version": "0.9.3"
@@ -106,7 +106,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.6.1",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 						{ 
 						"version": "0.6.1"
@@ -132,7 +132,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.6.1",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 						{ 
 						"version": "0.6.1"
@@ -169,7 +169,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.9.3",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 						{ 
 						"version": "0.9.3"
@@ -200,7 +200,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.9.3",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 						{ 
 						"version": "0.9.3"
@@ -253,7 +253,7 @@ func TestBundleGraphLoader(t *testing.T) {
 			bundle: Bundle{
 				Name:    "etcdoperator.v0.9.3",
 				Package: "etcd",
-				csv: &ClusterServiceVersion{
+				Csv: &ClusterServiceVersion{
 					Spec: json.RawMessage(`
 							{
 							"version": "0.9.3"
