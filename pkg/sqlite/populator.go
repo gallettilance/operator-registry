@@ -1,20 +1,15 @@
-package registry
+package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/operator-framework/operator-registry/pkg/image"
+	"github.com/operator-framework/operator-registry/pkg/registry"
 )
 
 type Dependencies struct {
@@ -23,26 +18,48 @@ type Dependencies struct {
 
 // DirectoryPopulator loads an unpacked operator bundle from a directory into the database.
 type DirectoryPopulator struct {
-	loader      Load
-	graphLoader GraphLoader
-	querier     Query
-	imageDirMap map[image.Reference]string
+	inputDatabase string
+	loader        registry.Load
+	graphLoader   registry.GraphLoader
+	querier       registry.Query
+	imageDirMap   map[image.Reference]string
 }
 
-func NewDirectoryPopulator(loader Load, graphLoader GraphLoader, querier Query, imageDirMap map[image.Reference]string) *DirectoryPopulator {
+func NewDirectoryPopulator(inputDatabase string, imageDirMap map[image.Reference]string) (*DirectoryPopulator, error) {
 	return &DirectoryPopulator{
-		loader:      loader,
-		graphLoader: graphLoader,
-		querier:     querier,
-		imageDirMap: imageDirMap,
-	}
+		inputDatabase: inputDatabase,
+		imageDirMap:   imageDirMap,
+	}, nil
 }
 
-func (i *DirectoryPopulator) Populate(mode Mode) error {
+func (i *DirectoryPopulator) Populate(mode registry.Mode) error {
+	db, err := sql.Open("sqlite3", i.inputDatabase)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	dbLoader, err := NewSQLLiteLoader(db)
+	if err != nil {
+		return err
+	}
+	if err := dbLoader.Migrate(context.TODO()); err != nil {
+		return err
+	}
+
+	graphLoader, err := NewSQLGraphLoaderFromDB(db)
+	if err != nil {
+		return err
+	}
+
+	i.loader = dbLoader
+	i.graphLoader = graphLoader
+	i.querier = NewSQLLiteQuerierFromDb(db)
+
 	var errs []error
-	imagesToAdd := make([]*ImageInput, 0)
+	imagesToAdd := make([]*registry.ImageInput, 0)
 	for to, from := range i.imageDirMap {
-		imageInput, err := NewImageInput(to, from)
+		imageInput, err := registry.NewImageInput(to, from)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -55,7 +72,7 @@ func (i *DirectoryPopulator) Populate(mode Mode) error {
 		return utilerrors.NewAggregate(errs)
 	}
 
-	err := i.loadManifests(imagesToAdd, mode)
+	err = i.loadManifests(imagesToAdd, mode)
 	if err != nil {
 		return err
 	}
@@ -63,15 +80,15 @@ func (i *DirectoryPopulator) Populate(mode Mode) error {
 	return nil
 }
 
-func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput) error {
+func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*registry.ImageInput) error {
 	var errs []error
 	images := make(map[string]struct{})
 	for _, image := range imagesToAdd {
-		images[image.bundle.BundleImage] = struct{}{}
+		images[image.Bundle.BundleImage] = struct{}{}
 	}
 
 	for _, image := range imagesToAdd {
-		bundlePaths, err := i.querier.GetBundlePathsForPackage(context.TODO(), image.bundle.Package)
+		bundlePaths, err := i.querier.GetBundlePathsForPackage(context.TODO(), image.Bundle.Package)
 		if err != nil {
 			// Assume that this means that the bundle is empty
 			// Or that this is the first time the package is loaded.
@@ -79,19 +96,24 @@ func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput) error 
 		}
 		for _, bundlePath := range bundlePaths {
 			if _, ok := images[bundlePath]; ok {
-				errs = append(errs, BundleImageAlreadyAddedErr{ErrorString: fmt.Sprintf("Bundle %s already exists", image.bundle.BundleImage)})
+				errs = append(errs, registry.BundleImageAlreadyAddedErr{ErrorString: fmt.Sprintf("Bundle %s already exists", image.Bundle.BundleImage)})
 				continue
 			}
 		}
-		for _, channel := range image.bundle.Channels {
-			bundle, err := i.querier.GetBundle(context.TODO(), image.bundle.Package, channel, image.bundle.csv.GetName())
+		channels, err := i.querier.ListChannels(context.TODO(), image.Bundle.Package)
+		if err != nil {
+			return err
+		}
+
+		for _, channel := range channels {
+			bundle, err := i.querier.GetBundle(context.TODO(), image.Bundle.Package, channel, image.Bundle.Csv.GetName())
 			if err != nil {
 				// Assume that if we can not find a bundle for the package, channel and or CSV Name that this is safe to add
 				continue
 			}
 			if bundle != nil {
 				// raise error that this package + channel + csv combo is already in the db
-				errs = append(errs, PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
+				errs = append(errs, registry.PackageVersionAlreadyAddedErr{ErrorString: "Bundle already added that provides package and csv"})
 				break
 			}
 		}
@@ -100,7 +122,7 @@ func (i *DirectoryPopulator) globalSanityCheck(imagesToAdd []*ImageInput) error 
 	return utilerrors.NewAggregate(errs)
 }
 
-func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode) error {
+func (i *DirectoryPopulator) loadManifests(imagesToAdd []*registry.ImageInput, mode registry.Mode) error {
 	// global sanity checks before insertion
 	err := i.globalSanityCheck(imagesToAdd)
 	if err != nil {
@@ -108,7 +130,7 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode)
 	}
 
 	switch mode {
-	case ReplacesMode:
+	case registry.ReplacesMode:
 		// TODO: This is relatively inefficient. Ideally, we should be able to use a replaces
 		// graph loader to construct what the graph would look like with a set of new bundles
 		// and use that to return an error if it's not valid, rather than insert one at a time
@@ -118,29 +140,30 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode)
 		// that took the updated graph as a whole as input, rather than inserting bundles of the
 		// same package linearly.
 		var err error
-		var validImagesToAdd []*ImageInput
+		var validImagesToAdd []*registry.ImageInput
+
 		for len(imagesToAdd) > 0 {
 			validImagesToAdd, imagesToAdd, err = i.getNextReplacesImagesToAdd(imagesToAdd)
 			if err != nil {
 				return err
 			}
 			for _, image := range validImagesToAdd {
-				err := i.loadManifestsReplaces(image.bundle, image.annotationsFile)
+				err := i.loadManifestsReplaces(image.Bundle, image.AnnotationsFile)
 				if err != nil {
 					return err
 				}
 			}
 		}
-	case SemVerMode:
+	case registry.SemVerMode:
 		for _, image := range imagesToAdd {
-			err := i.loadManifestsSemver(image.bundle, image.annotationsFile, false)
+			err := i.loadManifestsSemver(image.Bundle, image.AnnotationsFile, false)
 			if err != nil {
 				return err
 			}
 		}
-	case SkipPatchMode:
+	case registry.SkipPatchMode:
 		for _, image := range imagesToAdd {
-			err := i.loadManifestsSemver(image.bundle, image.annotationsFile, true)
+			err := i.loadManifestsSemver(image.Bundle, image.AnnotationsFile, true)
 			if err != nil {
 				return err
 			}
@@ -160,7 +183,7 @@ func (i *DirectoryPopulator) loadManifests(imagesToAdd []*ImageInput, mode Mode)
 	return nil
 }
 
-func (i *DirectoryPopulator) loadManifestsReplaces(bundle *Bundle, annotationsFile *AnnotationsFile) error {
+func (i *DirectoryPopulator) loadManifestsReplaces(bundle *registry.Bundle, annotationsFile *registry.AnnotationsFile) error {
 	channels, err := i.querier.ListChannels(context.TODO(), annotationsFile.GetName())
 	existingPackageChannels := map[string]string{}
 	for _, c := range channels {
@@ -188,19 +211,19 @@ func (i *DirectoryPopulator) loadManifestsReplaces(bundle *Bundle, annotationsFi
 	return nil
 }
 
-func (i *DirectoryPopulator) getNextReplacesImagesToAdd(imagesToAdd []*ImageInput) ([]*ImageInput, []*ImageInput, error) {
-	remainingImages := make([]*ImageInput, 0)
-	foundImages := make([]*ImageInput, 0)
+func (i *DirectoryPopulator) getNextReplacesImagesToAdd(imagesToAdd []*registry.ImageInput) ([]*registry.ImageInput, []*registry.ImageInput, error) {
+	remainingImages := make([]*registry.ImageInput, 0)
+	foundImages := make([]*registry.ImageInput, 0)
 
 	var errs []error
 
 	// Separate these image sets per package, since multiple different packages have
 	// separate graph
-	imagesPerPackage := make(map[string][]*ImageInput, 0)
+	imagesPerPackage := make(map[string][]*registry.ImageInput, 0)
 	for _, image := range imagesToAdd {
-		pkg := image.bundle.Package
+		pkg := image.Bundle.Package
 		if _, ok := imagesPerPackage[pkg]; !ok {
-			newPkgImages := make([]*ImageInput, 0)
+			newPkgImages := make([]*registry.ImageInput, 0)
 			newPkgImages = append(newPkgImages, image)
 			imagesPerPackage[pkg] = newPkgImages
 		} else {
@@ -216,15 +239,15 @@ func (i *DirectoryPopulator) getNextReplacesImagesToAdd(imagesToAdd []*ImageInpu
 
 		// first, try to pull the existing package graph from the database if it exists
 		graph, err := i.graphLoader.Generate(pkg)
-		if err != nil && !errors.Is(err, ErrPackageNotInDatabase) {
+		if err != nil && !errors.Is(err, registry.ErrPackageNotInDatabase) {
 			return nil, nil, err
 		}
 
 		var pkgErrs []error
 		// then check each image to see if it can be a replacement
-		replacesLoader := ReplacesGraphLoader{}
+		replacesLoader := registry.ReplacesGraphLoader{}
 		for _, pkgImage := range pkgImages {
-			canAdd, err := replacesLoader.CanAdd(pkgImage.bundle, graph)
+			canAdd, err := replacesLoader.CanAdd(pkgImage.Bundle, graph)
 			if err != nil {
 				pkgErrs = append(pkgErrs, err)
 			}
@@ -251,14 +274,14 @@ func (i *DirectoryPopulator) getNextReplacesImagesToAdd(imagesToAdd []*ImageInpu
 	return foundImages, remainingImages, nil
 }
 
-func (i *DirectoryPopulator) loadManifestsSemver(bundle *Bundle, annotations *AnnotationsFile, skippatch bool) error {
+func (i *DirectoryPopulator) loadManifestsSemver(bundle *registry.Bundle, annotations *registry.AnnotationsFile, skippatch bool) error {
 	graph, err := i.graphLoader.Generate(bundle.Package)
-	if err != nil && !errors.Is(err, ErrPackageNotInDatabase) {
+	if err != nil && !errors.Is(err, registry.ErrPackageNotInDatabase) {
 		return err
 	}
 
 	// add to the graph
-	bundleLoader := BundleGraphLoader{}
+	bundleLoader := registry.BundleGraphLoader{}
 	updatedGraph, err := bundleLoader.AddBundleToGraph(bundle, graph, annotations.Annotations.DefaultChannelName, skippatch)
 	if err != nil {
 		return err
@@ -271,95 +294,8 @@ func (i *DirectoryPopulator) loadManifestsSemver(bundle *Bundle, annotations *An
 	return nil
 }
 
-// loadBundle takes the directory that a CSV is in and assumes the rest of the objects in that directory
-// are part of the bundle.
-func loadBundle(csvName string, dir string) (*Bundle, error) {
-	log := logrus.WithFields(logrus.Fields{"dir": dir, "load": "bundle"})
-	files, err := ioutil.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	bundle := &Bundle{
-		Name: csvName,
-	}
-	for _, f := range files {
-		log = log.WithField("file", f.Name())
-		if f.IsDir() {
-			log.Info("skipping directory")
-			continue
-		}
-
-		if strings.HasPrefix(f.Name(), ".") {
-			log.Info("skipping hidden file")
-			continue
-		}
-
-		log.Info("loading bundle file")
-		var (
-			obj  = &unstructured.Unstructured{}
-			path = filepath.Join(dir, f.Name())
-		)
-		if err = DecodeFile(path, obj); err != nil {
-			log.WithError(err).Debugf("could not decode file contents for %s", path)
-			continue
-		}
-
-		// Don't include other CSVs in the bundle
-		if obj.GetKind() == "ClusterServiceVersion" && obj.GetName() != csvName {
-			continue
-		}
-
-		if obj.Object != nil {
-			bundle.Add(obj)
-		}
-	}
-
-	return bundle, nil
-}
-
-// findCSV looks through the bundle directory to find a csv
-func (i *ImageInput) findCSV(manifests string) (*unstructured.Unstructured, error) {
-	log := logrus.WithFields(logrus.Fields{"dir": i.from, "find": "csv"})
-
-	files, err := ioutil.ReadDir(manifests)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read directory %s: %s", manifests, err)
-	}
-
-	for _, f := range files {
-		log = log.WithField("file", f.Name())
-		if f.IsDir() {
-			log.Info("skipping directory")
-			continue
-		}
-
-		if strings.HasPrefix(f.Name(), ".") {
-			log.Info("skipping hidden file")
-			continue
-		}
-
-		var (
-			obj  = &unstructured.Unstructured{}
-			path = filepath.Join(manifests, f.Name())
-		)
-		if err = DecodeFile(path, obj); err != nil {
-			log.WithError(err).Debugf("could not decode file contents for %s", path)
-			continue
-		}
-
-		if obj.GetKind() != clusterServiceVersionKind {
-			continue
-		}
-
-		return obj, nil
-	}
-
-	return nil, fmt.Errorf("no csv found in bundle")
-}
-
 // loadOperatorBundle adds the package information to the loader's store
-func (i *DirectoryPopulator) loadOperatorBundle(manifest PackageManifest, bundle *Bundle) error {
+func (i *DirectoryPopulator) loadOperatorBundle(manifest registry.PackageManifest, bundle *registry.Bundle) error {
 	if manifest.PackageName == "" {
 		return nil
 	}
@@ -372,44 +308,27 @@ func (i *DirectoryPopulator) loadOperatorBundle(manifest PackageManifest, bundle
 }
 
 // translateAnnotationsIntoPackage attempts to translate the channels.yaml file at the given path into a package.yaml
-func translateAnnotationsIntoPackage(annotations *AnnotationsFile, csv *ClusterServiceVersion, existingPackageChannels map[string]string) (PackageManifest, error) {
-	manifest := PackageManifest{}
+func translateAnnotationsIntoPackage(annotations *registry.AnnotationsFile, csv *registry.ClusterServiceVersion, existingPackageChannels map[string]string) (registry.PackageManifest, error) {
+	manifest := registry.PackageManifest{}
 
 	for _, ch := range annotations.GetChannels() {
 		existingPackageChannels[ch] = csv.GetName()
 	}
 
-	channels := []PackageChannel{}
+	channels := []registry.PackageChannel{}
 	for c, current := range existingPackageChannels {
 		channels = append(channels,
-			PackageChannel{
+			registry.PackageChannel{
 				Name:           c,
 				CurrentCSVName: current,
 			})
 	}
 
-	manifest = PackageManifest{
+	manifest = registry.PackageManifest{
 		PackageName:        annotations.GetName(),
 		DefaultChannelName: annotations.GetDefaultChannelName(),
 		Channels:           channels,
 	}
 
 	return manifest, nil
-}
-
-// DecodeFile decodes the file at a path into the given interface.
-func DecodeFile(path string, into interface{}) error {
-	if into == nil {
-		panic("programmer error: decode destination must be instantiated before decode")
-	}
-
-	fileReader, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("unable to read file %s: %s", path, err)
-	}
-	defer fileReader.Close()
-
-	decoder := yaml.NewYAMLOrJSONDecoder(fileReader, 30)
-
-	return decoder.Decode(into)
 }

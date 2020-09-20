@@ -3,10 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
-	"database/sql"
-	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -20,28 +17,10 @@ import (
 	"github.com/operator-framework/operator-registry/pkg/registry"
 )
 
-func CreateTestDb(t *testing.T) (*sql.DB, func()) {
-	dbName := fmt.Sprintf("test-%d.db", rand.Int())
-
-	db, err := sql.Open("sqlite3", dbName)
-	require.NoError(t, err)
-
-	return db, func() {
-		defer func() {
-			if err := os.Remove(dbName); err != nil {
-				t.Fatal(err)
-			}
-		}()
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestConfigMapLoader(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -64,7 +43,7 @@ func TestConfigMapLoader(t *testing.T) {
 func TestReplaceCycle(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
@@ -90,7 +69,7 @@ func TestReplaceCycle(t *testing.T) {
 }
 
 func TestQuerierForConfigmap(t *testing.T) {
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	defer cleanup()
 	load, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)

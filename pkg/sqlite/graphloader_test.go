@@ -11,7 +11,7 @@ import (
 )
 
 func createLoadedTestDb(t *testing.T) (*sql.DB, func()) {
-	db, cleanup := CreateTestDb(t)
+	db, _, cleanup := CreateTestDb(t)
 	store, err := NewSQLLiteLoader(db)
 	require.NoError(t, err)
 	require.NoError(t, store.Migrate(context.TODO()))

@@ -1,4 +1,4 @@
-package registry_test
+package sqlite
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"github.com/operator-framework/operator-registry/pkg/api"
 	"github.com/operator-framework/operator-registry/pkg/image"
 	"github.com/operator-framework/operator-registry/pkg/registry"
-	"github.com/operator-framework/operator-registry/pkg/sqlite"
 
 	"k8s.io/apimachinery/pkg/util/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -28,13 +27,13 @@ func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 }
 
-func CreateTestDb(t *testing.T) (*sql.DB, func()) {
+func CreateTestDb(t *testing.T) (*sql.DB, string, func()) {
 	dbName := fmt.Sprintf("test-%d.db", rand.Int())
 
 	db, err := sql.Open("sqlite3", dbName)
 	require.NoError(t, err)
 
-	return db, func() {
+	return db, dbName, func() {
 		defer func() {
 			if err := os.Remove(dbName); err != nil {
 				t.Fatal(err)
@@ -46,57 +45,53 @@ func CreateTestDb(t *testing.T) (*sql.DB, func()) {
 	}
 }
 
-func createAndPopulateDB(db *sql.DB) (*sqlite.SQLQuerier, error) {
-	load, err := sqlite.NewSQLLiteLoader(db)
-	if err != nil {
-		return nil, err
-	}
-	err = load.Migrate(context.TODO())
-	if err != nil {
-		return nil, err
-	}
-	query := sqlite.NewSQLLiteQuerierFromDb(db)
+func CreateAndPopulateDB(t *testing.T) (*sql.DB, *SQLQuerier, func()) {
+	dbName := fmt.Sprintf("test-%d.db", rand.Int())
 
-	graphLoader, err := sqlite.NewSQLGraphLoaderFromDB(db)
-	if err != nil {
-		return nil, err
+	db, err := sql.Open("sqlite3", dbName)
+	require.NoError(t, err)
+
+	cleanup := func() {
+		defer func() {
+			if err := os.Remove(dbName); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
+	query := NewSQLLiteQuerierFromDb(db)
+	require.NoError(t, err)
 
 	populate := func(names []string) error {
 		refMap := make(map[image.Reference]string, 0)
 		for _, name := range names {
 			refMap[image.SimpleReference("quay.io/test/"+name)] = "../../bundles/" + name
 		}
-		return registry.NewDirectoryPopulator(
-			load,
-			graphLoader,
-			query,
-			refMap).Populate(registry.ReplacesMode)
+		populator, err := NewDirectoryPopulator(
+			dbName,
+			refMap)
+		require.NoError(t, err)
+		return populator.Populate(registry.ReplacesMode)
 	}
 	names := []string{"etcd.0.9.0", "etcd.0.9.2", "prometheus.0.22.2", "prometheus.0.14.0", "prometheus.0.15.0"}
-	if err := populate(names); err != nil {
-		return nil, err
-	}
+	err = populate(names)
+	require.NoError(t, err)
 
-	return query, nil
+	return db, query, cleanup
 }
 
 func TestImageLoader(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	_, _, cleanup := CreateAndPopulateDB(t)
 	defer cleanup()
-
-	_, err := createAndPopulateDB(db)
-	require.NoError(t, err)
 }
 
 func TestQuerierForImage(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	_, store, cleanup := CreateAndPopulateDB(t)
 	defer cleanup()
-
-	store, err := createAndPopulateDB(db)
-	require.NoError(t, err)
 
 	foundPackages, err := store.ListPackages(context.TODO())
 	require.NoError(t, err)
@@ -473,27 +468,19 @@ func TestImageLoading(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logrus.SetLevel(logrus.DebugLevel)
-			db, cleanup := CreateTestDb(t)
+			db, dbName, cleanup := CreateTestDb(t)
 			defer cleanup()
-			load, err := sqlite.NewSQLLiteLoader(db)
-			require.NoError(t, err)
-			require.NoError(t, load.Migrate(context.TODO()))
-			query := sqlite.NewSQLLiteQuerierFromDb(db)
-			graphLoader, err := sqlite.NewSQLGraphLoaderFromDB(db)
-			require.NoError(t, err)
 			for _, i := range tt.initImages {
-				p := registry.NewDirectoryPopulator(
-					load,
-					graphLoader,
-					query,
+				p, err := NewDirectoryPopulator(
+					dbName,
 					map[image.Reference]string{i.ref: i.dir})
+				require.NoError(t, err)
 				require.NoError(t, p.Populate(registry.ReplacesMode))
 			}
-			add := registry.NewDirectoryPopulator(
-				load,
-				graphLoader,
-				query,
+			add, err := NewDirectoryPopulator(
+				dbName,
 				map[image.Reference]string{tt.addImage.ref: tt.addImage.dir})
+			require.NoError(t, err)
 			err = add.Populate(registry.ReplacesMode)
 			if tt.wantErr {
 				require.True(t, checkAggErr(err, tt.err))
@@ -502,7 +489,7 @@ func TestImageLoading(t *testing.T) {
 			require.NoError(t, err)
 
 			for _, p := range tt.wantPackages {
-				graphLoader, err := sqlite.NewSQLGraphLoaderFromDB(db)
+				graphLoader, err := NewSQLGraphLoaderFromDB(db)
 				require.NoError(t, err)
 
 				result, err := graphLoader.Generate(p.Name)
@@ -528,11 +515,8 @@ func checkAggErr(aggErr, wantErr error) bool {
 
 func TestQuerierForDependencies(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	_, store, cleanup := CreateAndPopulateDB(t)
 	defer cleanup()
-
-	store, err := createAndPopulateDB(db)
-	require.NoError(t, err)
 
 	expectedDependencies := []*api.Dependency{
 		{
@@ -581,13 +565,10 @@ func TestQuerierForDependencies(t *testing.T) {
 	require.ElementsMatch(t, expectedDependencies, dependencies)
 }
 
-func TestListBundles(t *testing.T) {
+func TestPopulatorListBundles(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	db, cleanup := CreateTestDb(t)
+	_, store, cleanup := CreateAndPopulateDB(t)
 	defer cleanup()
-
-	store, err := createAndPopulateDB(db)
-	require.NoError(t, err)
 
 	expectedDependencies := []*api.Dependency{
 		{
@@ -809,16 +790,13 @@ func TestDeprecateBundle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
 			logrus.SetLevel(logrus.DebugLevel)
-			db, cleanup := CreateTestDb(t)
+			db, querier, cleanup := CreateAndPopulateDB(t)
 			defer cleanup()
 
-			querier, err := createAndPopulateDB(db)
+			store, err := NewSQLLiteLoader(db)
 			require.NoError(t, err)
 
-			store, err := sqlite.NewSQLLiteLoader(db)
-			require.NoError(t, err)
-
-			deprecator := sqlite.NewSQLDeprecatorForBundles(store, tt.args.bundles)
+			deprecator := NewSQLDeprecatorForBundles(store, tt.args.bundles)
 			err = deprecator.Deprecate()
 			require.Equal(t, tt.expected.err, err)
 
@@ -847,7 +825,7 @@ func TestDeprecateBundle(t *testing.T) {
 
 			require.ElementsMatch(t, tt.expected.deprecatedBundles, deprecatedBundles)
 
-			// Ensure remaining channels match
+			// Ensure remaining channels entries match
 			packages, err := querier.ListPackages(context.Background())
 			require.NoError(t, err)
 
