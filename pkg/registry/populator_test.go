@@ -1154,7 +1154,7 @@ func TestOverwrite(t *testing.T) {
 			db, cleanup := CreateTestDb(t)
 			defer cleanup()
 
-			store, err := sqlite.NewSQLLiteLoaderKeysOff(db)
+			store, err := sqlite.NewSQLLiteLoader(db)
 			require.NoError(t, err)
 			require.NoError(t, store.Migrate(context.TODO()))
 
