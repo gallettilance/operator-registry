@@ -167,17 +167,6 @@ func (s *sqlLoader) ClearBundle(pkg, csvName string) error {
 		return err
 	}
 
-	delPkg, err := tx.Prepare("delete from package where name=?")
-	if err != nil {
-		return err
-	}
-	defer delPkg.Close()
-
-	_, err = delPkg.Exec(pkg)
-	if err != nil {
-		return err
-	}
-
 	delImage, err := tx.Prepare("delete from related_image where operatorbundle_name=?")
 	if err != nil {
 		return err
